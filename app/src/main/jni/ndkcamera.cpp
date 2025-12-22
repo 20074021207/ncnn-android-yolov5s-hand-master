@@ -219,19 +219,30 @@ int NdkCamera::open(int _camera_facing)
 
     camera_manager = ACameraManager_create();
 
-    // find front camera
+    // find camera
     std::string camera_id;
+    std::string fallback_camera_id;
     {
         ACameraIdList* camera_id_list = 0;
         ACameraManager_getCameraIdList(camera_manager, &camera_id_list);
 
+        __android_log_print(ANDROID_LOG_WARN, "NdkCamera", "Found %d cameras", camera_id_list->numCameras);
+
         for (int i = 0; i < camera_id_list->numCameras; ++i)
         {
             const char* id = camera_id_list->cameraIds[i];
+            __android_log_print(ANDROID_LOG_WARN, "NdkCamera", "Checking camera %s", id);
+            
             ACameraMetadata* camera_metadata = 0;
-            ACameraManager_getCameraCharacteristics(camera_manager, id, &camera_metadata);
+            camera_status_t status = ACameraManager_getCameraCharacteristics(camera_manager, id, &camera_metadata);
+            
+            if (status != ACAMERA_OK)
+            {
+                __android_log_print(ANDROID_LOG_WARN, "NdkCamera", "Failed to get camera characteristics for camera %s, status: %d", id, status);
+                continue;
+            }
 
-            // query faceing
+            // query facing
             acamera_metadata_enum_android_lens_facing_t facing = ACAMERA_LENS_FACING_FRONT;
             {
                 ACameraMetadata_const_entry e = { 0 };
@@ -239,37 +250,66 @@ int NdkCamera::open(int _camera_facing)
                 facing = (acamera_metadata_enum_android_lens_facing_t)e.data.u8[0];
             }
 
-            if (camera_facing == 0 && facing != ACAMERA_LENS_FACING_FRONT)
-            {
-                ACameraMetadata_free(camera_metadata);
-                continue;
-            }
-
-            if (camera_facing == 1 && facing != ACAMERA_LENS_FACING_BACK)
-            {
-                ACameraMetadata_free(camera_metadata);
-                continue;
-            }
-
-            camera_id = id;
-
             // query orientation
             int orientation = 0;
             {
                 ACameraMetadata_const_entry e = { 0 };
                 ACameraMetadata_getConstEntry(camera_metadata, ACAMERA_SENSOR_ORIENTATION, &e);
-
                 orientation = (int)e.data.i32[0];
             }
 
-            camera_orientation = orientation;
+            __android_log_print(ANDROID_LOG_WARN, "NdkCamera", "Camera %s facing: %d, orientation: %d (looking for facing %d)", 
+                id, facing, orientation, camera_facing == 0 ? ACAMERA_LENS_FACING_FRONT : ACAMERA_LENS_FACING_BACK);
+
+            // Store first available camera as fallback
+            if (fallback_camera_id.empty())
+            {
+                fallback_camera_id = id;
+            }
+
+            // Try to find exact match
+            if (camera_facing == 0 && facing == ACAMERA_LENS_FACING_FRONT)
+            {
+                camera_id = id;
+                camera_orientation = orientation;
+                ACameraMetadata_free(camera_metadata);
+                __android_log_print(ANDROID_LOG_WARN, "NdkCamera", "Selected front camera %s with orientation %d", camera_id.c_str(), camera_orientation);
+                break;
+            }
+
+            if (camera_facing == 1 && facing == ACAMERA_LENS_FACING_BACK)
+            {
+                camera_id = id;
+                camera_orientation = orientation;
+                ACameraMetadata_free(camera_metadata);
+                __android_log_print(ANDROID_LOG_WARN, "NdkCamera", "Selected back camera %s with orientation %d", camera_id.c_str(), camera_orientation);
+                break;
+            }
+
+            // If this is the last camera and we haven't found a match, use this one
+            if (i == camera_id_list->numCameras - 1 && camera_id.empty())
+            {
+                camera_id = id;
+                camera_orientation = orientation;
+                __android_log_print(ANDROID_LOG_WARN, "NdkCamera", "Using camera %s (facing: %d) as fallback with orientation %d", 
+                    camera_id.c_str(), facing, camera_orientation);
+            }
 
             ACameraMetadata_free(camera_metadata);
-
-            break;
         }
 
         ACameraManager_deleteCameraIdList(camera_id_list);
+    }
+
+    if (camera_id.empty())
+    {
+        __android_log_print(ANDROID_LOG_ERROR, "NdkCamera", "No suitable camera found!");
+        if (camera_manager)
+        {
+            ACameraManager_delete(camera_manager);
+            camera_manager = 0;
+        }
+        return -1;
     }
 
     __android_log_print(ANDROID_LOG_WARN, "NdkCamera", "open %s %d", camera_id.c_str(), camera_orientation);
@@ -482,7 +522,8 @@ void NdkCameraWindow::on_image(const unsigned char* nv21, int nv21_width, int nv
             ASensorEventQueue_enableSensor(sensor_event_queue, accelerometer_sensor);
         }
 
-        int id = ALooper_pollAll(0, 0, 0, 0);
+//        int id = ALooper_pollAll(0, 0, 0, 0);
+        int id = ALooper_pollOnce(0, 0, 0, 0);
         if (id == NDKCAMERAWINDOW_ID)
         {
             ASensorEvent e[8];
