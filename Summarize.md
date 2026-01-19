@@ -32,6 +32,7 @@
 ---
 四、关键目录与文件说明（推测结构）
 源码结构：
+```
 /app
 /src/main/java/...        # Java 层 Activity / UI 代码
 /src/main/jni/...         # C++ 本地推理与 JNI 接口
@@ -41,6 +42,7 @@ build.gradle                # Android 构建配置
 settings.gradle
 README.md                   # 项目说明
 LICENSE                     # 开源许可证
+```
 推荐结构（符合 Android + NDK 工程惯例）：
 - Java 层：MainActivity、CameraFrame 回调、UI 交互；
 - JNI 层：桥接 Java <-> C++，调用 ncnn 推理；
